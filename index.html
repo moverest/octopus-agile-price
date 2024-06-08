@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<title>Octopus Agile Dashboard</title>
+		<meta name="viewport" content="width=device-width, initial-scale=1.0">
+		<style>
+			* {
+				color: #eee;
+				font-family: sans-serif;
+			}
+
+			html, body {
+				background-color: #000;
+				margin: 0;
+				padding: 0;
+			}
+
+			.price-table {
+				margin: auto;
+				border-spacing: 2px;
+			}
+
+			.price-table td {
+				padding: 2px 4px;
+			}
+
+			h1, h2 {
+				text-align: left;
+				margin-left: 35px;
+			}
+
+			h2 > small {
+				color: #aaa;
+			}
+
+			.dec_price {
+				font-size: .7em;
+			}
+
+			td.hour {
+				text-align: right;
+				padding-left: 10px;
+				color: #ddd;
+			}
+
+			td.price {
+				width: 40px;
+				text-align: center;
+			}
+
+			td.current {
+				font-weight: bold;
+				box-shadow: 0px 0px 3px #eee;
+				color: #fff;
+				text-shadow: #fff 0px 0px 2px;
+			}
+
+			td.current_hour {
+				font-weight: bold;
+				color: #eee;
+				text-shadow: #fff 0px 0px 2px;
+			}
+
+			.container {
+				display: flex;
+				justify-content: center;
+				flex-flow: row wrap;
+				column-gap: 20px;
+				padding-bottom: 20px;
+			}
+
+			div.tomorrow-prices-not-available {
+				max-width: 250px;
+				text-align: center;
+				margin-top: 10px;
+				display: flex;
+				justify-content: center;
+				align-items: center;
+			}
+
+			div.today > h2, div.today > h2 > small {
+				color: #fff;
+				text-shadow: #fff 0px 0px 4px;
+			}
+		</style>
+		<script>
+			async function load_tariffs(
+				start_day,
+				end_day,
+				on_day_ready,
+				on_missing_day,
+				on_no_more,
+			) {
+				start_day = new Date(
+					start_day.getFullYear(),
+					start_day.getMonth(),
+					start_day.getDate(),
+				);
+
+				end_day = new Date(
+					end_day.getFullYear(),
+					end_day.getMonth(),
+					end_day.getDate() + 1,
+				);
+
+				const res = await fetch(`https://api.octopus.energy/v1/products/${TARIF_PRODUCT}/electricity-tariffs/${TARIFF_CODE}/standard-unit-rates/?period_from=${start_day.toISOString()}&period_to=${end_day.toISOString()}&page_size=1500`);
+				const data = await res.json();
+
+				if (data.count == 0) {
+					on_no_more();
+					return;
+				}
+
+				const raw_slots = data.results.map(
+					slot => ({
+						from: new Date(slot.valid_from),
+						price: slot.value_inc_vat,
+					})
+				);
+
+				var last_curr_day = new Date(
+					raw_slots[0].from.getFullYear(),
+					raw_slots[0].from.getMonth(),
+					raw_slots[0].from.getDate(),
+				)
+				var curr_prices = [];
+
+				if (
+					Math.floor(last_curr_day.getTime() / 1000 / 60 / 60 / 24) !=
+					Math.floor(end_day.getTime() / 1000 / 60 / 60 / 24 - 1)
+				) {
+					on_missing_day();
+				}
+
+				for (slot of raw_slots) {
+					const curr_day = new Date(
+						slot.from.getFullYear(),
+						slot.from.getMonth(),
+						slot.from.getDate(),
+					);
+
+					if (curr_day.getTime() == last_curr_day.getTime()) {
+						curr_prices.push(slot.price);
+					} else {
+						curr_prices.reverse();
+
+						on_day_ready(curr_prices, last_curr_day);
+
+						curr_prices.length = 0;
+						last_curr_day = curr_day;
+						curr_prices.push(slot.price);
+					}
+				}
+
+				curr_prices.reverse();
+				on_day_ready(curr_prices, last_curr_day);
+			}
+
+			function get_price_bg_color(price) {
+				if (price < 0) {
+					return "rgba(104, 0, 233, .9)";
+				}
+
+				const p = Math.min(price, 40);
+				r = Math.min(p, 40) / 40 * 255;
+				g = (28 - Math.min(p, 28)) / 40 * 180;
+
+				return `rgba(${r}, ${g}, 0, .9)`;
+			}
+
+			function draw_prices(container, prices, start_time) {
+				table = document.createElement("table")
+				table.classList.add("price-table");
+				curr_time = new Date();
+
+				for (i = 0; i < 12; i++) {
+					const tr = document.createElement("tr");
+
+					for (k of [
+						i * 2,
+						i * 2 + 1,
+						i * 2 + 24,
+						i * 2 + 25,
+					]) {
+						const curr_price = prices[k];
+						const curr_from = new Date(start_time);
+						curr_from.setMinutes(k * 30);
+						const curr_to = new Date(start_time);
+						curr_to.setMinutes((k + 1) * 30);
+
+						if (k % 2 == 0) {
+							const td = document.createElement("td");
+							const txt = document.createTextNode(curr_from.getHours());
+							td.appendChild(txt);
+							tr.appendChild(td);
+
+							td.classList.add("hour")
+							if (
+								curr_from < curr_time &&
+								curr_time.getTime() < curr_to.getTime() + 30 * 60 * 1000
+							) {
+								td.classList.add("current_hour")
+							}
+						}
+
+						const td = document.createElement("td");
+						if (curr_price !== undefined) {
+							const int_price_span = document.createElement("span");
+							const dec_price_span = document.createElement("span");
+
+							[int_price, dec_price] = curr_price.toFixed(2).split(".");
+
+							int_price_span.textContent = int_price;
+							dec_price_span.textContent = "." + dec_price;
+
+							int_price_span.classList.add("int_price")
+							dec_price_span.classList.add("dec_price")
+
+							td.appendChild(int_price_span);
+							td.appendChild(dec_price_span);
+
+							td.style.backgroundColor = get_price_bg_color(curr_price);
+							dec_price_span.classList.add("dec_price")
+							td.classList.add("price")
+
+							if (curr_from < curr_time && curr_time < curr_to) {
+								td.classList.add("current");
+							}
+						} else {
+							td.textContent = "-";
+							td.style.textAlign = "center";
+						}
+
+						tr.appendChild(td);
+					}
+					table.appendChild(tr);
+
+				}
+
+				const h2 = document.createElement("h2");
+				const h2_small = document.createElement("small");
+				[h2.textContent, h2_small.textContent, is_today] = toDateTitle(start_time, curr_time);
+				h2.textContent += " ";
+				const div = document.createElement("div");
+				if (is_today) {
+					div.classList.add("today")
+				}
+
+				div.appendChild(h2);
+				h2.appendChild(h2_small);
+				div.appendChild(table);
+				container.appendChild(div);
+			}
+
+			_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+			function toDateTitle(d, now) {
+				const now_ts = now.getTime() / 1000 / 60 / 60 / 24;
+				const d_ts = d.getTime() / 1000 / 60 / 60 / 24;
+				var day = null;
+				var is_today = false;
+
+				if (d_ts <= now_ts && now_ts < d_ts + 1) {
+					day = "Today";
+					is_today = true;
+				} else if (d_ts <= now_ts - 1 && now_ts - 1 < d_ts + 1) {
+					day = "Yesterday";
+				} else if (d_ts <= now_ts + 1 && now_ts + 1 < d_ts + 1) {
+					day = "Tomorrow";
+				} else {
+					day = _DAYS[d.getDay()];
+				}
+
+				const year = d.getFullYear();
+				const month = String(d.getMonth() + 1).padStart(2, "0");
+				const date = String(d.getDate()).padStart(2, "0");
+
+				return [day, `${year}-${month}-${date}`, is_today];
+			}
+
+			var last_loaded_date = null;
+			var no_more_pages = false;
+
+			async function read_draw() {
+				const start_time = new Date();
+				start_time.setDate(start_time.getDate() - 7);
+				const end_time = new Date();
+				end_time.setDate(end_time.getDate() + 1);
+
+				const container = document.getElementById("container");
+				const slots = await load_tariffs(
+					start_time, end_time,
+					(prices, start) => {
+						draw_prices(container, prices, start);
+						last_loaded_date = start;
+					},
+					() => {
+						const div = document.createElement("div");
+						const span = document.createElement("span");
+						span.textContent = "Tomorrow's prices should be ready after 16:00. ⏳";
+						div.classList.add("tomorrow-prices-not-available")
+						div.appendChild(span);
+						container.appendChild(div);
+					},
+					() => {no_more_pages = true;},
+				);
+
+				window.addEventListener("scroll", handle_scroll);
+				while (await handle_scroll());
+			}
+
+			let TARIFF_CODE = null;
+			let TARIF_PRODUCT = null;
+
+			function init_tariff() {
+				const query_string = window.location.search;
+				const params = new URLSearchParams(query_string);
+
+				const product = params.get("product");
+				const code = params.get("code");
+
+				const product_re = /^AGILE-[0-9-]+$/;
+				const code_re = /^[0-9A-Z-]+-AGILE-[0-9A-Z-]+$/;
+
+				if (!product.match(product_re)) {
+					console.log("Invalid product.");
+					return false;
+				}
+
+				if (!code.match(code_re)) {
+					console.log("Invalid tariff code.");
+					return false;
+				}
+
+				TARIF_PRODUCT = product;
+				TARIFF_CODE = code;
+
+				return true;
+			}
+
+			async function ready() {
+				if (init_tariff()) {
+					read_draw();
+				}
+			}
+
+			async function load_next() {
+				if (no_more_pages) {
+					return;
+				}
+
+				const end_time = new Date(last_loaded_date);
+				end_time.setDate(end_time.getDate() - 1);
+
+				const start_time = new Date(end_time);
+				start_time.setDate(start_time.getDate() - 30);
+
+				const container = document.getElementById("container");
+				const slots = await load_tariffs(
+					start_time, end_time,
+					(prices, start) => {
+						draw_prices(container, prices, start);
+						last_loaded_date = start;
+					},
+					() => {},
+					() => {no_more_pages = true;},
+				)
+			}
+
+			async function handle_scroll() {
+				const end_of_page = window.innerHeight + window.pageYOffset + 300 >= document.body.offsetHeight;
+				if (end_of_page) {
+					await load_next();
+					return true;
+				}
+
+				return false;
+			}
+
+			document.addEventListener("DOMContentLoaded", ready);
+		</script>
+	</head>
+	<body>
+		<div class="container" id="container">
+		</div>
+	</body>
+</html>
